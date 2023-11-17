@@ -28,20 +28,35 @@ class RoverOdometryPublisher:
         rospy.Subscriber('/drive_system_left_motors_feedbacks', Float64MultiArray, self.left_motor_callback)
         rospy.Subscriber('/drive_system_right_motors_feedbacks', Float64MultiArray, self.right_motor_callback)
 
+        self.pose_msg = PoseStamped()
+        self.path_msg = Path()
+
+
     def left_motor_callback(self, data):
         # Sol motor geri bildirimi işleme
-        self.wheel_velocity_left = data.data[0]  
+        self.wheel_velocity_left = data.data[0]
+        # RPM olarak aldığımız tekerlek verilerini m/s cinsinden hıza çevirme
+        self.wheel_velocity_left = 2 * math.pi * self.RADIUS * (self.wheel_velocity_left / 60)
 
     def right_motor_callback(self, data):
         # Sağ motor geri bildirimi işleme
-        self.wheel_velocity_right = data.data[0]  
+        self.wheel_velocity_right = data.data[0]
+        # RPM olarak aldığımız tekerlek verilerini m/s cinsinden hıza çevirme
+        self.wheel_velocity_right = 2 * math.pi * self.RADIUS * (self.wheel_velocity_right / 60)  
 
     def calculate_odometry(self):
-        # Tekerlek hareket verilerini kullanarak pozisyon ve yönelimi hesaplama
-        # Varsayılan olarak sıfır 
-        x = 0.0
-        y = 0.0
-        theta = 0.0
+        dt = 10.0 / 10.0  # Zaman adımı, Hz cinsinden
+        v_left = self.wheel_velocity_left
+        v_right = self.wheel_velocity_right
+
+        # Hareket modelini kullanarak pozisyon ve yönelimi güncelleme
+        v = self.RADIUS / 2.0 * (v_left + v_right)
+        omega = self.RADIUS / self.WHEELBASE * (v_right - v_left)
+        theta = self.pose_msg.pose.orientation.z + omega * dt
+
+        x = self.pose_msg.pose.position.x + v * dt * math.cos(theta)
+        y = self.pose_msg.pose.position.y + v * dt * math.sin(theta)
+        
 
         # Quaternion oluşturma
         quaternion = Quaternion(*quaternion_from_euler(0, 0, theta))
@@ -57,17 +72,6 @@ class RoverOdometryPublisher:
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "base_link"
 
-        path_msg = Path()
-        path_msg.header.stamp = rospy.Time.now()
-        path_msg.header.frame_id = "odom"
-
-        pose_stamped = PoseStamped()
-        pose_stamped.pose = odom_msg.pose.pose
-        pose_stamped.header = path_msg.header
-
-        path_msg.poses.append(pose_stamped)
-        self.path_pub.publish(path_msg)
-
         # Pozisyon bilgilerini doldurma
         odom_msg.pose.pose.position.x = x
         odom_msg.pose.pose.position.y = y
@@ -82,8 +86,19 @@ class RoverOdometryPublisher:
         # Odometry mesajını yayınlama
         self.odom_publ.publish(odom_msg)
 
+        # Pose mesajını güncelle
+        self.pose_msg.header.stamp = rospy.Time.now()
+        self.pose_msg.header.frame_id = "odom"
+        self.pose_msg.pose = odom_msg.pose.pose
+
+        # Path mesajını güncelle ve yayınla
+        self.path_msg.header.stamp = rospy.Time.now()
+        self.path_msg.header.frame_id = "odom"
+        self.path_msg.poses.append(self.pose_msg)
+        self.path_pub.publish(self.path_msg)
+
     def spin(self):
-        rate = rospy.Rate(10)  # 1 Hz
+        rate = rospy.Rate(10)  # 10 Hz
 
         while not rospy.is_shutdown():
             self.publish_odometry()
@@ -95,3 +110,4 @@ if __name__ == '__main__':
         rover_odom_publisher.spin()
     except rospy.ROSInterruptException:
         pass
+
